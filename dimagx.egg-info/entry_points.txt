@@ -1,0 +1,4 @@
+[console_scripts]
+dimagx = dimagx.cli:app
+dimagx-commit-log = dimagx.commit_log:main
+dimagx-mcp = dimagx.mcp_server:main

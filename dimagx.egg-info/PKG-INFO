@@ -1,0 +1,225 @@
+Metadata-Version: 2.4
+Name: dimagx
+Version: 0.1.0
+Summary: Project brain for coding agents — memory graph for code, prompts, features and PRDs
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: typer>=0.12.0
+Requires-Dist: rich>=13.0.0
+Requires-Dist: kuzu>=0.7.0
+Requires-Dist: gitpython>=3.1.0
+Requires-Dist: mcp>=1.0.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: anthropic>=0.25.0
+Requires-Dist: pypdf2>=3.0.0
+Requires-Dist: python-docx>=1.0.0
+Requires-Dist: watchdog>=4.0.0
+
+# DimagX 🧠
+
+**Project brain for coding agents.**  
+One init. Drop your PRDs. Switch models freely — your agent always knows where you left off.
+
+---
+
+## What it does
+
+DimagX builds a persistent memory graph for your project — code, features, prompts, PRDs, git history, and architectural decisions — and exposes it to any coding agent via MCP.
+
+Instead of your agent re-reading 50 files every session, it calls `get_context()` and gets a precise, oriented summary in seconds.
+
+---
+
+## Install
+
+```bash
+pip install dimagx
+```
+
+Or from source:
+```bash
+git clone https://github.com/yourname/dimagx
+cd dimagx
+pip install -e .
+```
+
+---
+
+## Quick Start
+
+```bash
+# Go to any project (new or existing)
+cd my-project
+
+# Initialize DimagX
+dimagx init
+
+# See what's in memory
+dimagx status
+
+# See where you left off
+dimagx context
+```
+
+---
+
+## Commands
+
+### Project
+```bash
+dimagx init          # Scan project, build memory graph
+dimagx status        # Memory dashboard — counts per layer
+dimagx context       # Human-readable: features, commits, prompts, PRDs
+dimagx watch         # Background watcher — auto re-index on file save
+```
+
+### Features
+```bash
+dimagx feature start "Pricing Engine"   # Tag active work
+dimagx feature done  "Pricing Engine"   # Mark complete
+dimagx feature list                      # Show all features + status
+```
+
+### PRDs
+```bash
+dimagx prd ingest ./docs/pricing.md     # Summarize + store PRD (needs ANTHROPIC_API_KEY)
+dimagx prd list                          # List all PRDs
+dimagx prd show "Pricing Engine"        # Full PRD details + linked features
+```
+
+### Decisions (ADRs)
+```bash
+dimagx decision add                     # Log architectural decision (interactive)
+dimagx decision list                    # Show all decisions
+```
+
+### Git Hook
+```bash
+dimagx hook install                     # Auto-log every commit to graph
+dimagx hook uninstall                   # Remove hook
+```
+
+### MCP Server (for coding agents)
+```bash
+dimagx mcp                              # Start MCP server + show config
+```
+
+---
+
+## Connect to your agent
+
+Add to `.claude/mcp.json` (Claude Code) or `.cursor/mcp.json` (Cursor/Windsurf):
+
+```json
+{
+  "mcpServers": {
+    "dimagx": {
+      "command": "dimagx-mcp"
+    }
+  }
+}
+```
+
+Your agent now has access to:
+
+| MCP Tool | What it does |
+|---|---|
+| `get_context()` | Full project orientation — call at session start |
+| `query_memory(question)` | Search across all memory layers |
+| `log_prompt(text, summary, outcome)` | Capture agent work into graph |
+| `add_decision(title, context, choice, reason)` | Log ADR from inside agent |
+| `get_features(status?)` | List features, optionally filtered |
+| `get_files(feature?, language?)` | List indexed files |
+
+---
+
+## PRD Ingestion
+
+Set your Anthropic API key:
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Drop any PRD (Markdown, PDF, DOCX, TXT):
+```bash
+dimagx prd ingest ./docs/auth_prd.md
+dimagx prd ingest ./docs/pricing_v2.pdf
+```
+
+DimagX will:
+1. Extract text from the file
+2. Summarize with Claude Haiku (fast + cheap)
+3. Auto-create feature nodes from the PRD
+4. Link PRD → features in the graph
+
+Or drop files directly into `.dimagx/prd/` while `dimagx watch` is running — auto-ingested.
+
+---
+
+## Multi-PRD projects
+
+Each PRD is a separate node. Drop as many as you have:
+
+```
+.dimagx/prd/
+├── prd_auth.md
+├── prd_pricing_v2.md
+├── prd_online_store.pdf
+└── prd_finedine.md
+```
+
+PRDs link to features. Features link to files. Files link to commits. The graph connects everything.
+
+---
+
+## What gets stored
+
+| Layer | Source | Auto? |
+|---|---|---|
+| Files | Codebase | ✅ on init + watch |
+| Git commits | Git history | ✅ on init + hook |
+| Features | You / agent | Manual / MCP |
+| PRDs | You drop files | ✅ watch auto-ingests |
+| Prompts | Agent sessions | Via MCP `log_prompt` |
+| Decisions | You / agent | `dimagx decision add` / MCP |
+
+---
+
+## Folder structure (per project)
+
+```
+your-project/
+└── .dimagx/
+    ├── config.yaml      # Project identity + stack
+    ├── graph.db         # Kuzu embedded graph (gitignored)
+    ├── prd/             # Drop PRDs here
+    ├── features/        # Feature metadata
+    └── decisions/       # ADR markdown files
+```
+
+`graph.db` is gitignored by default. `config.yaml` can be committed.
+
+---
+
+## Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `ANTHROPIC_API_KEY` | Required for PRD summarization |
+
+---
+
+## Built with
+
+- [Kuzu](https://kuzudb.com/) — embedded graph database
+- [Typer](https://typer.tiangolo.com/) — CLI framework
+- [Rich](https://rich.readthedocs.io/) — terminal UI
+- [MCP Python SDK](https://github.com/anthropics/mcp) — agent protocol
+- [Watchdog](https://python-watchdog.readthedocs.io/) — file system watcher
+- [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) — PRD summarization
+
+---
+
+## License
+
+MIT
