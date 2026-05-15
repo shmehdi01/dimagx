@@ -13,7 +13,7 @@ Usage:
 import hashlib
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 import typer
 from rich.console import Console
@@ -27,8 +27,12 @@ from dimagx import scanner
 from dimagx.graph import init_schema
 from dimagx.db import (
     get_db, get_conn, count_nodes,
-    upsert_project, upsert_file, upsert_commit, upsert_feature,
+    upsert_project, upsert_file, upsert_commit, upsert_feature, update_feature,
+    upsert_symbol, link_file_symbol,
+    upsert_entity, link_file_entity,
+    upsert_bug, update_bug, link_project_bug, link_bug_file,
     link_project_file, link_project_commit, link_project_feature,
+    esc,
 )
 
 app = typer.Typer(
@@ -38,8 +42,25 @@ app = typer.Typer(
 )
 console = Console()
 
+@app.callback(invoke_without_command=True)
+def main_callback(
+    ctx: typer.Context,
+    version: Optional[bool] = typer.Option(None, "--version", "-v", help="Show version"),
+):
+    """DimagX — Project brain for coding agents."""
+    if version:
+        console.print("DimagX [bold cyan]v0.1.0[/bold cyan]")
+        raise typer.Exit()
+    
+    if ctx.invoked_subcommand is None:
+        from dimagx.splash import show_splash
+        show_splash()
+
 feature_app = typer.Typer(help="Manage features")
 app.add_typer(feature_app, name="feature")
+
+bug_app = typer.Typer(help="Manage bugs")
+app.add_typer(bug_app, name="bug")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -68,13 +89,13 @@ def require_init() -> Path:
 # ── Init ───────────────────────────────────────────────────────────────────────
 
 @app.command()
-def init():
+def init(force: bool = typer.Option(False, "--force", "-f", help="Force re-initialization")):
     """Initialize DimagX in the current project."""
 
     root = Path.cwd()
     memory_dir = cfg.get_memory_dir(root)
 
-    if cfg.config_exists(root):
+    if cfg.config_exists(root) and not force:
         console.print(Panel(
             "[yellow]DimagX already initialized.[/yellow]\n"
             "Run [bold]dimagx status[/bold] to see what's indexed.",
@@ -82,6 +103,10 @@ def init():
             border_style="yellow"
         ))
         raise typer.Exit()
+
+    if force and memory_dir.exists():
+        import shutil
+        shutil.rmtree(memory_dir)
 
     console.print(Panel(
         "[bold cyan]DimagX[/bold cyan] — Project brain for coding agents\n"
@@ -160,9 +185,34 @@ def init():
             files = scanner.scan_files(root)
             file_count = len(files)
 
+            from dimagx.symbols import extract_symbols, extract_entities
+            from dimagx.embeddings import generate_embedding
+
             for f in files:
-                upsert_file(conn, f["id"], f["path"], f["language"], f["purpose"], f["updated"])
+                # Generate embedding for file
+                emb = generate_embedding(f"{f['path']} {f['purpose']}")
+                upsert_file(conn, f["id"], f["path"], f["language"], f["purpose"], f["updated"], embedding=emb)
                 link_project_file(conn, project_id, f["id"])
+                
+                # Index symbols
+                try:
+                    symbols = extract_symbols(root / f["path"])
+                    for s in symbols:
+                        symbol_id = f"sym_{make_id(f['path'] + s['name'] + s['type'])}"
+                        upsert_symbol(conn, symbol_id, s["name"], s["type"], s["start_line"])
+                        link_file_symbol(conn, f["id"], symbol_id)
+                except Exception:
+                    pass
+
+                # Index entities (framework-specific)
+                try:
+                    entities = extract_entities(root / f["path"])
+                    for e in entities:
+                        entity_id = f"ent_{make_id(f['path'] + e['name'] + e['kind'])}"
+                        upsert_entity(conn, entity_id, e["name"], e["kind"], e["framework"], e["line"])
+                        link_file_entity(conn, f["id"], entity_id)
+                except Exception:
+                    pass
 
             if scanner.is_git_repo(root):
                 progress.update(task, description="Reading git history...")
@@ -218,6 +268,7 @@ def status():
 
     db = get_db(memory_dir)
     conn = get_conn(db)
+    init_schema(conn)
 
     table = Table(
         title=f"[bold cyan]{config['project']}[/bold cyan] — DimagX Memory",
@@ -231,7 +282,10 @@ def status():
     layers = [
         ("Files",     "File",     "indexed from codebase"),
         ("Features",  "Feature",  "tagged work units"),
+        ("Bugs",      "Bug",      "tracked issues"),
         ("PRDs",      "PRD",      "product requirements"),
+        ("Entities",  "Entity",   "cubits, pages, components"),
+        ("Symbols",   "Symbol",   "functions & classes"),
         ("Prompts",   "Prompt",   "agent prompt logs"),
         ("Commits",   "Commit",   "git history"),
         ("Decisions", "Decision", "architectural ADRs"),
@@ -247,12 +301,214 @@ def status():
     console.print(f"[dim]Description:[/dim] {config.get('description', '')}\n")
 
 
+@app.command("arch")
+def arch_summary():
+    """Show the architectural breakdown of the project."""
+    root = require_init()
+    memory_dir = cfg.get_memory_dir(root)
+
+    db = get_db(memory_dir)
+    conn = get_conn(db)
+    init_schema(conn)
+
+    # Breakdown by kind
+    result = conn.execute("MATCH (e:Entity) RETURN e.kind, count(*) ORDER BY count(*) DESC")
+    rows = []
+    while result.has_next():
+        rows.append(result.get_next())
+    
+    if not rows:
+        console.print("\n[dim]No architectural entities indexed yet.[/dim]\n")
+        conn.close()
+        return
+
+    table = Table(title="Architectural Breakdown", box=None, padding=(0, 2))
+    table.add_column("Type", style="bold cyan")
+    table.add_column("Count", justify="right", style="bold")
+    table.add_column("Details", style="dim")
+
+    type_descs = {
+        "cubit": "Flutter business logic components",
+        "bloc": "Flutter business logic components",
+        "page": "Application UI screens",
+        "component": "Reusable UI building blocks",
+        "hook": "React state/lifecycle logic",
+        "route": "API endpoints",
+        "provider": "State management providers",
+    }
+
+    for kind, count in rows:
+        desc = type_descs.get(kind.lower(), "other entities")
+        table.add_row(kind.capitalize() + "s", str(count), desc)
+
+    console.print()
+    console.print(table)
+    
+    # List top entities
+    console.print("\n[bold]Recent Entities:[/bold]")
+    res = conn.execute("MATCH (e:Entity) RETURN e.name, e.kind, e.framework LIMIT 10")
+    while res.has_next():
+        name, kind, framework = res.get_next()
+        console.print(f"  • [cyan]{name}[/cyan] [dim]({kind})[/dim] {f'[{framework}]' if framework else ''}")
+    
+    console.print("\n[dim]Run [bold]dimagx graph[/bold] to see how they connect to files.[/dim]\n")
+    conn.close()
+
+
+@app.command("graph")
+def graph_view():
+    """Show a hierarchical ASCII view of the project brain."""
+    from rich.tree import Tree
+    from dimagx.db import esc
+
+    root = require_init()
+    config = cfg.load_config(root)
+    memory_dir = cfg.get_memory_dir(root)
+
+    db = get_db(memory_dir)
+    conn = get_conn(db)
+    init_schema(conn)
+
+    tree = Tree(f"[bold cyan]DimagX Brain: {config['project']}[/bold cyan]")
+
+    # 1. PRDs -> Features -> Files
+    prds_res = conn.execute("MATCH (p:PRD) RETURN p.id, p.title, p.version")
+    rows = []
+    while prds_res.has_next():
+        rows.append(prds_res.get_next())
+    
+    if rows:
+        prd_branch = tree.add("[bold yellow]📄 PRDs[/bold yellow]")
+        for pid, ptitle, pver in rows:
+            p_node = prd_branch.add(f"[bold]{ptitle}[/bold] [dim]({pver or 'v1'})[/dim]")
+            
+            # Linked features
+            feats_res = conn.execute(f"MATCH (p:PRD {{id: '{esc(pid)}'}})-[:COVERS]->(f:Feature) RETURN f.id, f.title, f.status")
+            f_rows = []
+            while feats_res.has_next():
+                f_rows.append(feats_res.get_next())
+            
+            for fid, ftitle, fstatus in f_rows:
+                status_color = "green" if fstatus == "done" else "yellow" if fstatus == "in_progress" else "blue"
+                f_node = p_node.add(f"[bold {status_color}]⚡ {ftitle}[/bold {status_color}] [dim]({fstatus})[/dim]")
+                
+                # Linked files
+                files_res = conn.execute(f"MATCH (f:Feature {{id: '{esc(fid)}'}})-[:IMPLEMENTS]->(file:File) RETURN file.path")
+                while files_res.has_next():
+                    f_node.add(f"[dim]📁 {files_res.get_next()[0]}[/dim]")
+
+    # 2. Decisions
+    decs_res = conn.execute("MATCH (d:Decision) RETURN d.title, d.choice")
+    d_rows = []
+    while decs_res.has_next():
+        d_rows.append(decs_res.get_next())
+    
+    if d_rows:
+        dec_branch = tree.add("[bold magenta]🏗 Decisions[/bold magenta]")
+        for dtitle, dchoice in d_rows:
+            dec_branch.add(f"[bold]{dtitle}[/bold] [dim]→ {(dchoice or '')[:60]}[/dim]")
+
+    # 3. Other Features (not tied to a PRD)
+    other_feats_res = conn.execute(
+        "MATCH (f:Feature) WHERE NOT (f)<-[:COVERS]-(:PRD) "
+        "RETURN f.id, f.title, f.status"
+    )
+    o_rows = []
+    while other_feats_res.has_next():
+        o_rows.append(other_feats_res.get_next())
+        
+    if o_rows:
+        other_branch = tree.add("[bold yellow]⚡ Features (Standalone)[/bold yellow]")
+        for fid, ftitle, fstatus in o_rows:
+            status_color = "green" if fstatus == "done" else "yellow" if fstatus == "in_progress" else "blue"
+            f_node = other_branch.add(f"[bold {status_color}]⚡ {ftitle}[/bold {status_color}] [dim]({fstatus})[/dim]")
+            
+            # Linked files
+            files_res = conn.execute(f"MATCH (f:Feature {{id: '{esc(fid)}'}})-[:IMPLEMENTS]->(file:File) RETURN file.path")
+            while files_res.has_next():
+                f_node.add(f"[dim]📁 {files_res.get_next()[0]}[/dim]")
+
+    # 4. Bugs
+    bugs_res = conn.execute("MATCH (b:Bug) RETURN b.id, b.title, b.status, b.severity")
+    b_rows = []
+    while bugs_res.has_next():
+        b_rows.append(bugs_res.get_next())
+    
+    if b_rows:
+        bug_branch = tree.add("[bold red]🐛 Bugs[/bold red]")
+        for bid, btitle, bstatus, bseverity in b_rows:
+            color = "green" if bstatus == "fixed" else "red" if bseverity == "critical" else "yellow"
+            b_node = bug_branch.add(f"[bold {color}]🐛 {btitle}[/bold {color}] [dim]({bstatus}, {bseverity})[/dim]")
+            
+            # Fixed files
+            fixes_res = conn.execute(f"MATCH (b:Bug {{id: '{esc(bid)}'}})-[:FIXES]->(file:File) RETURN file.path")
+            while fixes_res.has_next():
+                b_node.add(f"[dim]🩹 Fixed: {fixes_res.get_next()[0]}[/dim]")
+
+    # 5. Architectural Map
+    files_with_entities = conn.execute(
+        "MATCH (f:File)-[:HAS_ENTITY]->(e:Entity) "
+        "RETURN f.path, count(e) ORDER BY count(e) DESC"
+    )
+    fe_rows = []
+    while files_with_entities.has_next():
+        fe_rows.append(files_with_entities.get_next())
+    
+    if fe_rows:
+        arch_branch = tree.add("[bold cyan]🏛 Architecture[/bold cyan]")
+        for fpath, ecount in fe_rows:
+            f_node = arch_branch.add(f"[bold]{fpath}[/bold] [dim]({ecount} entities)[/dim]")
+            entities_res = conn.execute(
+                f"MATCH (f:File {{path: '{esc(fpath)}'}})-[:HAS_ENTITY]->(e:Entity) "
+                "RETURN e.name, e.kind"
+            )
+            while entities_res.has_next():
+                ename, ekind = entities_res.get_next()
+                f_node.add(f"[cyan]• {ename}[/cyan] [dim]({ekind})[/dim]")
+
+    conn.close()
+    console.print()
+    console.print(tree)
+    console.print()
+
+
 # ── Feature commands ───────────────────────────────────────────────────────────
 
+def detect_feature_from_branch(root: Path) -> str:
+    import subprocess
+    try:
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=root,
+            stderr=subprocess.DEVNULL,
+            text=True
+        ).strip()
+        
+        if branch in ["main", "master", "develop"]:
+            return ""
+            
+        # Clean up branch name: feature/graph-view -> Graph View
+        name = branch.split("/")[-1] if "/" in branch else branch
+        return name.replace("-", " ").replace("_", " ").title()
+    except Exception:
+        return ""
+
+
 @feature_app.command("start")
-def feature_start(title: str = typer.Argument(..., help="Feature name")):
+def feature_start(
+    title: Optional[str] = typer.Argument(None, help="Feature name (auto-detected from branch if omitted)"),
+    description: Optional[str] = typer.Option("", "--desc", "-d", help="Feature description"),
+):
     """Mark a feature as started and add to graph."""
     root = require_init()
+    
+    if not title:
+        title = detect_feature_from_branch(root)
+        if not title:
+            console.print("[red]✗[/red] No title provided and could not detect from git branch.")
+            raise typer.Exit(1)
+        console.print(f"[dim]Auto-detected feature from branch:[/dim] [bold]{title}[/bold]")
+
     memory_dir = cfg.get_memory_dir(root)
     config = cfg.load_config(root)
 
@@ -263,11 +519,15 @@ def feature_start(title: str = typer.Argument(..., help="Feature name")):
     feature_id = make_id(title, prefix="feat_")
     now = datetime.now().isoformat()
 
-    upsert_feature(conn, feature_id, title, "", "in_progress", now, now)
+    from dimagx.embeddings import generate_embedding
+    emb = generate_embedding(f"{title} {description or ''}")
+    upsert_feature(conn, feature_id, title, description or "", "in_progress", now, now, embedding=emb)
     link_project_feature(conn, make_id(config["project"]), feature_id)
     conn.close()
 
     console.print(f"\n[green]✔[/green] Feature started: [bold]{title}[/bold]")
+    if description:
+        console.print(f"[dim]{description}[/dim]")
     console.print(f"[dim]ID: {feature_id}[/dim]\n")
 
 
@@ -282,10 +542,89 @@ def feature_done(title: str = typer.Argument(..., help="Feature name")):
 
     feature_id = make_id(title, prefix="feat_")
     now = datetime.now().isoformat()
-    upsert_feature(conn, feature_id, title, "", "done", now, now)
+    # Use update_feature to avoid overwriting description
+    update_feature(conn, feature_id, status="done", updated=now)
     conn.close()
 
     console.print(f"\n[green]✔[/green] Feature marked done: [bold]{title}[/bold]\n")
+
+
+@feature_app.command("update")
+def feature_update(
+    title: str = typer.Argument(..., help="Feature title to identify it"),
+    desc: Optional[str] = typer.Option(None, "--desc", "-d", help="New description"),
+    status: Optional[str] = typer.Option(None, "--status", "-s", help="New status (planned, in_progress, done)"),
+):
+    """Update an existing feature's description or status."""
+    root = require_init()
+    memory_dir = cfg.get_memory_dir(root)
+
+    db = get_db(memory_dir)
+    conn = get_conn(db)
+
+    feature_id = make_id(title, prefix="feat_")
+    
+    # Check if exists
+    res = conn.execute(f"MATCH (f:Feature {{id: '{feature_id}'}}) RETURN f.title")
+    if not res.has_next():
+        console.print(f"\n[red]✗[/red] Feature not found: [bold]{title}[/bold]\n")
+        conn.close()
+        raise typer.Exit(1)
+
+    now = datetime.now().isoformat()
+    emb = None
+    if desc:
+        from dimagx.embeddings import generate_embedding
+        emb = generate_embedding(f"{title} {desc}")
+    
+    update_feature(conn, feature_id, description=desc, status=status, updated=now, embedding=emb)
+    conn.close()
+
+    console.print(f"\n[green]✔[/green] Feature updated: [bold]{title}[/bold]\n")
+
+
+@feature_app.command("show")
+def feature_show(title: str = typer.Argument(..., help="Feature title to show details")):
+    """Show detailed information about a feature."""
+    from dimagx.db import esc
+    root = require_init()
+    memory_dir = cfg.get_memory_dir(root)
+
+    db = get_db(memory_dir)
+    conn = get_conn(db)
+
+    feature_id = make_id(title, prefix="feat_")
+    result = conn.execute(
+        f"MATCH (f:Feature {{id: '{esc(feature_id)}'}}) "
+        "RETURN f.title, f.description, f.status, f.created, f.updated"
+    )
+
+    if not result.has_next():
+        console.print(f"\n[red]✗[/red] Feature not found: [bold]{title}[/bold]\n")
+        conn.close()
+        raise typer.Exit(1)
+
+    row = result.get_next()
+    f_title, f_desc, f_status, f_created, f_updated = row
+    conn.close()
+
+    status_colors = {
+        "in_progress": "yellow",
+        "done":        "green",
+        "planned":     "blue",
+    }
+    color = status_colors.get(f_status, "white")
+
+    console.print()
+    console.print(Panel(
+        f"[bold]{f_title}[/bold]  [{color}]{f_status}[/{color}]\n\n"
+        f"{f_desc or '[dim]No description[/dim]'}\n\n"
+        f"[dim]Created:[/dim] {(f_created or '')[:19]}\n"
+        f"[dim]Updated:[/dim] {(f_updated or '')[:19]}",
+        title="Feature Details",
+        border_style=color
+    ))
+    console.print()
 
 
 @feature_app.command("list")
@@ -324,6 +663,125 @@ def feature_list():
     for title, status_val, updated in rows:
         colored = status_colors.get(status_val, status_val)
         table.add_row(title, colored, (updated or "")[:10])
+
+    console.print()
+    console.print(table)
+    console.print()
+
+
+# ── Bug commands ──────────────────────────────────────────────────────────────
+
+@bug_app.command("report")
+def bug_report(
+    title: str = typer.Argument(..., help="Short title of the bug"),
+    description: str = typer.Option("", "--desc", "-d", help="Bug description"),
+    severity: str = typer.Option("medium", "--severity", "-s", help="critical, high, medium, low"),
+):
+    """Report a new bug."""
+    root = require_init()
+    memory_dir = cfg.get_memory_dir(root)
+    config = cfg.load_config(root)
+
+    db = get_db(memory_dir)
+    conn = get_conn(db)
+    init_schema(conn)
+
+    bug_id = make_id(title, "bug_")
+    now = datetime.now().isoformat()
+    project_id = make_id(config["project"])
+
+    upsert_bug(
+        conn,
+        id=bug_id,
+        title=title,
+        description=description,
+        status="open",
+        severity=severity,
+        created=now,
+        updated=now,
+    )
+    link_project_bug(conn, project_id, bug_id)
+    conn.close()
+
+    console.print(f"\n[red]🐛 Bug reported:[/red] [bold]{title}[/bold] [dim]({bug_id})[/dim]\n")
+
+
+@bug_app.command("fix")
+def bug_fix(
+    title: str = typer.Argument(..., help="Title of the bug to mark as fixed"),
+    files: Optional[List[str]] = typer.Option(None, "--file", "-f", help="Files changed to fix the bug"),
+):
+    """Mark a bug as fixed."""
+    root = require_init()
+    memory_dir = cfg.get_memory_dir(root)
+
+    db = get_db(memory_dir)
+    conn = get_conn(db)
+    init_schema(conn)
+
+    # Find the bug
+    res = conn.execute(f"MATCH (b:Bug) WHERE b.title = '{esc(title)}' RETURN b.id")
+    if not res.has_next():
+        console.print(f"[red]✗[/red] Bug [bold]{title}[/bold] not found.")
+        conn.close()
+        raise typer.Exit(1)
+    
+    bug_id = res.get_next()[0]
+    now = datetime.now().isoformat()
+    update_bug(conn, bug_id, status="fixed", updated=now)
+
+    if files:
+        for f in files:
+            link_bug_file(conn, bug_id, f)
+
+    conn.close()
+    console.print(f"\n[green]✔[/green] Bug [bold]{title}[/bold] marked as fixed.\n")
+
+
+@bug_app.command("list")
+def bug_list():
+    """List all reported bugs."""
+    root = require_init()
+    memory_dir = cfg.get_memory_dir(root)
+
+    db = get_db(memory_dir)
+    conn = get_conn(db)
+    init_schema(conn)
+
+    result = conn.execute("MATCH (b:Bug) RETURN b.title, b.status, b.severity, b.updated ORDER BY b.severity DESC")
+    rows = []
+    while result.has_next():
+        rows.append(result.get_next())
+    conn.close()
+
+    if not rows:
+        console.print("\n[dim]No bugs reported. (Hopefully a good sign!)[/dim]\n")
+        return
+
+    table = Table(title="Bugs", box=None, padding=(0, 2))
+    table.add_column("Title",   style="bold")
+    table.add_column("Status",  justify="center")
+    table.add_column("Severity", justify="center")
+    table.add_column("Updated", style="dim")
+
+    severity_colors = {
+        "critical": "[bold red]critical[/bold red]",
+        "high":     "[red]high[/red]",
+        "medium":   "[yellow]medium[/yellow]",
+        "low":      "[blue]low[/blue]",
+    }
+    status_colors = {
+        "open":  "[bold red]open[/bold red]",
+        "fixed": "[green]fixed[/green]",
+    }
+
+    for title, status_val, sev, updated in rows:
+        table.add_row(
+            title, 
+            status_colors.get(status_val, status_val),
+            severity_colors.get(sev.lower(), sev),
+            (updated or "")[:10]
+        )
 
     console.print()
     console.print(table)
@@ -416,6 +874,42 @@ def decision_list():
     console.print()
     console.print(table)
     console.print()
+
+
+# ── UI command ─────────────────────────────────────────────────────────────────
+
+@app.command("ui")
+def ui(
+    port: int = typer.Option(8000, "--port", "-p", help="Port to run the UI server on"),
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to run the UI server on"),
+):
+    """Start the DimagX Web UI to visualize the project memory graph."""
+    import uvicorn
+    import webbrowser
+    from dimagx.ui import app as ui_app, set_project_root
+    
+    root = require_init()
+    set_project_root(root)
+    
+    url = f"http://{host}:{port}"
+    console.print(Panel(
+        f"[bold cyan]DimagX Web UI[/bold cyan]\n\n"
+        f"Project: [bold]{root.name}[/bold]\n"
+        f"Server:  [green]{url}[/green]\n\n"
+        "Opening browser...",
+        border_style="cyan"
+    ))
+    
+    # Open browser after a short delay to let server start
+    def open_browser():
+        import time
+        time.sleep(1.5)
+        webbrowser.open(url)
+    
+    import threading
+    threading.Thread(target=open_browser, daemon=True).start()
+    
+    uvicorn.run(ui_app, host=host, port=port, log_level="warning")
 
 
 # ── MCP command ────────────────────────────────────────────────────────────────
@@ -549,7 +1043,6 @@ def prd_list():
 
     db = get_db(memory_dir)
     conn = get_conn(db)
-
     result = conn.execute(
         "MATCH (p:PRD) RETURN p.title, p.version, p.summary, p.source, p.created ORDER BY p.created DESC"
     )
@@ -559,18 +1052,18 @@ def prd_list():
     conn.close()
 
     if not rows:
-        console.print("\n[dim]No PRDs yet. Run `dimagx prd ingest <file>`[/dim]\n")
+        console.print("\n[dim]No PRDs ingested yet.[/dim]\n")
         return
 
-    table = Table(title="PRDs", box=None, padding=(0, 2))
+    table = Table(title="Product Requirements Documents", box=None, padding=(0, 2))
     table.add_column("Title",   style="bold")
-    table.add_column("Ver",     style="cyan", justify="center")
+    table.add_column("Version", style="cyan", justify="center")
     table.add_column("Summary", style="dim")
     table.add_column("Date",    style="dim")
 
     for title, version, summary, source, created in rows:
         table.add_row(
-            title or "",
+            title or "Untitled",
             version or "v1",
             (summary or "")[:60] + ("..." if len(summary or "") > 60 else ""),
             (created or "")[:10],
@@ -578,6 +1071,47 @@ def prd_list():
 
     console.print()
     console.print(table)
+    console.print()
+
+
+@prd_app.command("add")
+def prd_add(
+    requirement: str = typer.Argument(..., help="Paste the raw requirements text"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", "-k", help="Anthropic API key"),
+):
+    """Add a PRD directly from a requirement string."""
+    from dimagx.prd import summarize_prd, store_prd, get_api_key
+    
+    root = require_init()
+    memory_dir = cfg.get_memory_dir(root)
+    config = cfg.load_config(root)
+    key = api_key or get_api_key(root)
+    
+    if not key:
+        console.print(
+            "[red]✗[/red] Anthropic API key required.\n"
+            "  Set [bold]ANTHROPIC_API_KEY[/bold] env var or pass [bold]--api-key[/bold]"
+        )
+        raise typer.Exit(1)
+        
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
+        task = progress.add_task("Summarizing requirements with AI...", total=None)
+        prd_data = summarize_prd(requirement, key)
+        
+        progress.update(task, description="Storing in graph...")
+        db = get_db(memory_dir)
+        conn = get_conn(db)
+        init_schema(conn)
+        
+        project_id = make_id(config["project"])
+        prd_id = store_prd(conn, project_id, prd_data, "manual_input", prd_data.get("version", "v1"))
+        conn.close()
+        
+    console.print(f"\n[green]✔[/green] PRD added: [bold]{prd_data.get('title', 'Untitled')}[/bold]")
+    if prd_data.get("features"):
+        console.print("[dim]Features auto-created:[/dim]")
+        for f in prd_data["features"]:
+            console.print(f"  • {f} [dim](planned)[/dim]")
     console.print()
 
 

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DimagX | Project Memory Graph</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="//unpkg.com/three"></script>
+    <script src="//unpkg.com/three-spritetext"></script>
+    <script src="//unpkg.com/force-graph"></script>
+    <script src="//unpkg.com/3d-force-graph"></script>
+</head>
+
+<body>
+    <div id="app">
+        <header>
+            <div class="logo">
+                <i data-lucide="brain"></i>
+                <span>DimagX</span>
+            </div>
+            <div class="controls">
+                <button id="toggle-3d" title="Toggle 3D View"><i data-lucide="box"></i></button>
+                <button id="reset-view" title="Reset View"><i data-lucide="refresh-ccw"></i></button>
+                <div class="search-box">
+                    <i data-lucide="search"></i>
+                    <input type="text" id="search-input" placeholder="Search nodes...">
+                </div>
+            </div>
+        </header>
+
+        <main>
+            <div id="graph-container"></div>
+
+            <aside id="details-panel" class="hidden">
+                <div class="panel-header">
+                    <span id="node-label-tag" class="tag">Feature</span>
+                    <button id="close-panel"><i data-lucide="x"></i></button>
+                </div>
+                <div class="panel-content">
+                    <h1 id="node-title">Select a node</h1>
+                    <div id="node-properties" class="properties-list"></div>
+
+                    <div id="links-container" class="links-section hidden">
+                        <h3>Relationships</h3>
+                        <div id="node-links" class="links-list"></div>
+                    </div>
+                </div>
+            </aside>
+        </main>
+
+        <footer>
+            <div class="legend">
+                <div class="legend-item"><span class="dot project"></span> Project</div>
+                <div class="legend-item"><span class="dot file"></span> File</div>
+                <div class="legend-item"><span class="dot feature"></span> Feature</div>
+                <div class="legend-item"><span class="dot prd"></span> PRD</div>
+                <div class="legend-item"><span class="dot commit"></span> Commit</div>
+                <div class="legend-item"><span class="dot decision"></span> Decision</div>
+                <div class="legend-item"><span class="dot prompt"></span> Prompt</div>
+            </div>
+        </footer>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+
+</html>

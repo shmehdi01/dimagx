@@ -16,7 +16,11 @@ from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileModifi
 from watchdog.observers import Observer
 
 from dimagx.scanner import INDEXABLE_EXTENSIONS, IGNORE_DIRS
-from dimagx.db import get_db, get_conn, upsert_file, link_project_file
+from dimagx.db import (
+    get_db, get_conn, upsert_file, link_project_file,
+    upsert_symbol, link_file_symbol,
+    upsert_entity, link_file_entity
+)
 from dimagx.graph import init_schema
 from dimagx.config import load_config
 
@@ -73,6 +77,28 @@ class CodeFileHandler(FileSystemEventHandler):
             init_schema(conn)
             upsert_file(conn, file_id, str(rel), path.suffix.lstrip("."), "", datetime.now().isoformat())
             link_project_file(conn, self.project_id, file_id)
+
+            # Index symbols and entities
+            from dimagx.symbols import extract_symbols, extract_entities
+            
+            try:
+                symbols = extract_symbols(path)
+                for s in symbols:
+                    sym_id = f"sym_{hashlib.md5((str(rel) + s['name'] + s['type']).encode()).hexdigest()[:12]}"
+                    upsert_symbol(conn, sym_id, s["name"], s["type"], s["start_line"])
+                    link_file_symbol(conn, file_id, sym_id)
+            except Exception:
+                pass
+
+            try:
+                entities = extract_entities(path)
+                for e in entities:
+                    ent_id = f"ent_{hashlib.md5((str(rel) + e['name'] + e['kind']).encode()).hexdigest()[:12]}"
+                    upsert_entity(conn, ent_id, e["name"], e["kind"], e["framework"], e["line"])
+                    link_file_entity(conn, file_id, ent_id)
+            except Exception:
+                pass
+
             conn.close()
             print(f"  [dimagx] indexed: {rel}", flush=True)
         except Exception as e:

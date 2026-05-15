@@ -45,8 +45,17 @@ MEMORY_DIR = ROOT / ".dimagx"
 
 # Import after ROOT is set
 from dimagx.config import load_config
-from dimagx.db import get_db, get_conn, esc, upsert_feature, link_project_feature
+from dimagx.db import (
+    get_db, get_conn, esc, 
+    upsert_feature, link_project_feature, 
+    upsert_bug, link_project_bug, 
+    update_feature, update_bug
+)
 from dimagx.graph import init_schema
+
+BUG_KEYWORDS = {"fix", "bug", "issue", "crash", "error", "broken", "failed", "regression"}
+FEATURE_KEYWORDS = {"implement", "feature", "add", "new", "enhance", "build", "create", "support"}
+DONE_KEYWORDS = {"done", "finished", "completed", "resolved", "fixed", "implemented"}
 
 # ── MCP App ────────────────────────────────────────────────────────────────────
 
@@ -55,7 +64,8 @@ mcp = FastMCP(
     instructions=(
         "DimagX is the memory brain for this project. "
         "Always call get_context() at the start of a session to orient yourself. "
-        "Call log_prompt() after completing any significant task. "
+        "Do NOT analyze files from scratch. Always use get_files() or query_memory() to look up files by feature or purpose. "
+        "Call log_prompt() after completing any significant task. DimagX will automatically detect if your prompt is a Bug Fix or a Feature implementation based on your description.",
         "Use query_memory() before asking the user to explain something — it may already be known."
     ),
 )
@@ -125,6 +135,10 @@ def get_context() -> str:
         r = conn.execute("MATCH (d:Decision) RETURN count(d) AS c")
         decision_count = r.get_next()[0]
 
+        # Bug count
+        r = conn.execute("MATCH (b:Bug) WHERE b.status = 'open' RETURN count(b) AS c")
+        open_bugs = r.get_next()[0]
+
         conn.close()
 
         lines = [
@@ -133,6 +147,7 @@ def get_context() -> str:
             f"**Stack:** {stack}",
             f"**Files indexed:** {file_count}",
             f"**Architectural decisions:** {decision_count}",
+            f"**Open bugs:** {open_bugs}",
             "",
         ]
 
@@ -140,6 +155,19 @@ def get_context() -> str:
             lines += ["## Active Features (in progress)", *active_features, ""]
         else:
             lines += ["## Active Features", "  None. Use `dimagx feature start` to tag work.", ""]
+
+        # Active bugs
+        r = conn.execute(
+            "MATCH (b:Bug) WHERE b.status = 'open' "
+            "RETURN b.title, b.severity ORDER BY b.updated DESC LIMIT 5"
+        )
+        active_bugs = []
+        while r.has_next():
+            row = r.get_next()
+            active_bugs.append(f"  • {row[0]} ({row[1]})")
+        
+        if active_bugs:
+            lines += ["## Active Bugs (open)", *active_bugs, ""]
 
         if recent_commits:
             lines += ["## Recent Git Commits", *recent_commits, ""]
@@ -186,17 +214,15 @@ def log_prompt(
         conn = get_conn(db)
         init_schema(conn)
 
+        from dimagx.embeddings import generate_embedding
+        from dimagx.db import upsert_prompt
+
         prompt_id = f"prompt_{hashlib.md5((text + datetime.now().isoformat()).encode()).hexdigest()[:10]}"
         now = datetime.now().isoformat()
-
-        conn.execute(f"""
-            MERGE (p:Prompt {{id: '{esc(prompt_id)}'}})
-            ON CREATE SET
-                p.text             = '{esc(text[:500])}',
-                p.response_summary = '{esc(response_summary[:500])}',
-                p.outcome          = '{esc(outcome)}',
-                p.created          = '{esc(now)}'
-        """)
+        
+        # Generate embedding for semantic search
+        emb = generate_embedding(f"{text} {response_summary}")
+        upsert_prompt(conn, prompt_id, text, response_summary, outcome, now, embedding=emb)
 
         # Link to feature if provided
         if feature_title:
@@ -208,9 +234,47 @@ def log_prompt(
                 """)
             except Exception:
                 pass
+        else:
+            # Auto-detect Bug or Feature
+            words = text.lower().split()
+            is_bug = any(w in BUG_KEYWORDS for w in words)
+            is_feature = any(w in FEATURE_KEYWORDS for w in words)
+            is_done = any(w in DONE_KEYWORDS for w in words) or outcome == "implemented"
+
+            project_id = get_project_id(config)
+            
+            if is_bug:
+                # Suggest bug title from first line of text
+                title = text.split('\n')[0][:60]
+                bug_id = f"bug_{hashlib.md5(title.encode()).hexdigest()[:12]}"
+                bug_status = "fixed" if is_done else "open"
+                
+                upsert_bug(
+                    conn, bug_id, title, text, 
+                    status=bug_status, severity="medium", 
+                    created=now, updated=now, embedding=emb
+                )
+                link_project_bug(conn, project_id, bug_id)
+                conn.execute(f"MATCH (p:Prompt {{id: '{esc(prompt_id)}'}}), (b:Bug {{id: '{esc(bug_id)}'}}) MERGE (p)-[:LOGGED_FOR]->(b)")
+            
+            elif is_feature:
+                title = text.split('\n')[0][:60]
+                feature_id = f"feat_{hashlib.md5(title.encode()).hexdigest()[:12]}"
+                feat_status = "done" if is_done else "in_progress"
+                
+                upsert_feature(
+                    conn, feature_id, title, text, 
+                    status=feat_status, created=now, updated=now, embedding=emb
+                )
+                link_project_feature(conn, project_id, feature_id)
+                conn.execute(f"MATCH (p:Prompt {{id: '{esc(prompt_id)}'}}), (f:Feature {{id: '{esc(feature_id)}'}}) MERGE (p)-[:LOGGED_FOR]->(f)")
 
         conn.close()
-        return f"✔ Prompt logged: {prompt_id}"
+        msg = f"✔ Prompt logged: {prompt_id}"
+        if not feature_title:
+            if is_bug: msg += f" (Auto-detected Bug: {title})"
+            elif is_feature: msg += f" (Auto-detected Feature: {title})"
+        return msg
 
     except Exception as e:
         return f"DimagX error logging prompt: {e}"
@@ -232,64 +296,112 @@ def query_memory(question: str) -> str:
         db = get_db(MEMORY_DIR)
         conn = get_conn(db)
 
-        keywords = [w.lower() for w in question.split() if len(w) > 3]
+        from dimagx.embeddings import generate_embedding, cosine_similarity
+
+        query_vec = generate_embedding(question)
         results = []
 
-        # Search features
-        r = conn.execute("MATCH (f:Feature) RETURN f.title, f.description, f.status")
-        while r.has_next():
-            row = r.get_next()
-            title = (row[0] or "").lower()
-            desc  = (row[1] or "").lower()
-            if any(k in title or k in desc for k in keywords):
-                results.append(f"[Feature] {row[0]} — {row[2]} — {row[1][:100] if row[1] else ''}")
+        # We'll pull nodes and compute similarity in memory for now
+        # Kuzu supports vector search in later versions, but this is robust
+        
+        keywords = [w.lower() for w in question.split() if len(w) > 3]
 
-        # Search prompts
-        r = conn.execute("MATCH (p:Prompt) RETURN p.text, p.response_summary, p.outcome, p.created ORDER BY p.created DESC")
+        # 1. Search Features
+        r = conn.execute("MATCH (f:Feature) RETURN f.title, f.description, f.status, f.embedding")
         while r.has_next():
             row = r.get_next()
-            text    = (row[0] or "").lower()
-            summary = (row[1] or "").lower()
-            if any(k in text or k in summary for k in keywords):
-                results.append(
-                    f"[Prompt/{row[2]}] {row[0][:80]} → {row[1][:100] if row[1] else ''}"
-                )
+            title, desc, status, emb = row[0], row[1], row[2], row[3]
+            score = 0.0
+            if emb:
+                score = cosine_similarity(query_vec, emb)
+            else:
+                score = 0.5 if any(k in (title + (desc or "")).lower() for k in keywords) else 0.0
+            
+            if score > 0.3:
+                results.append((score, f"[Feature] {title} — {status} — {desc[:100] if desc else ''}"))
 
-        # Search PRDs
-        r = conn.execute("MATCH (p:PRD) RETURN p.title, p.summary")
+        # 2. Search Bugs
+        r = conn.execute("MATCH (b:Bug) RETURN b.title, b.description, b.status, b.severity, b.embedding")
         while r.has_next():
             row = r.get_next()
-            title   = (row[0] or "").lower()
-            summary = (row[1] or "").lower()
-            if any(k in title or k in summary for k in keywords):
-                results.append(f"[PRD] {row[0]}: {row[1][:120] if row[1] else ''}")
+            title, desc, status, sev, emb = row[0], row[1], row[2], row[3], row[4]
+            score = 0.0
+            if emb:
+                score = cosine_similarity(query_vec, emb)
+            else:
+                score = 0.5 if any(k in (title + (desc or "")).lower() for k in keywords) else 0.0
+            
+            if score > 0.3:
+                results.append((score, f"[Bug] {title} — {status} ({sev}) — {desc[:100] if desc else ''}"))
 
-        # Search decisions
-        r = conn.execute("MATCH (d:Decision) RETURN d.title, d.choice, d.reason")
+        # 3. Search Prompts
+        r = conn.execute("MATCH (p:Prompt) RETURN p.text, p.response_summary, p.outcome, p.embedding")
         while r.has_next():
             row = r.get_next()
-            title  = (row[0] or "").lower()
-            choice = (row[1] or "").lower()
-            reason = (row[2] or "").lower()
-            if any(k in title or k in choice or k in reason for k in keywords):
-                results.append(f"[Decision] {row[0]} → chose: {row[1]} — {row[2][:100] if row[2] else ''}")
+            text, summary, outcome, emb = row[0], row[1], row[2], row[3]
+            score = 0.0
+            if emb:
+                score = cosine_similarity(query_vec, emb)
+            else:
+                score = 0.5 if any(k in (text + summary).lower() for k in keywords) else 0.0
+            
+            if score > 0.3:
+                results.append((score, f"[Prompt/{outcome}] {text[:80]} → {summary[:100] if summary else ''}"))
 
-        # Search files
-        r = conn.execute("MATCH (f:File) RETURN f.path, f.purpose, f.language")
+        # 3. Search PRDs
+        r = conn.execute("MATCH (p:PRD) RETURN p.title, p.summary, p.embedding")
         while r.has_next():
             row = r.get_next()
-            path    = (row[0] or "").lower()
-            purpose = (row[1] or "").lower()
-            if any(k in path or k in purpose for k in keywords):
-                results.append(f"[File/{row[2]}] {row[0]} — {row[1][:80] if row[1] else ''}")
+            title, summary, emb = row[0], row[1], row[2]
+            score = 0.0
+            if emb:
+                score = cosine_similarity(query_vec, emb)
+            else:
+                score = 0.5 if any(k in (title + summary).lower() for k in keywords) else 0.0
+            
+            if score > 0.3:
+                results.append((score, f"[PRD] {title}: {summary[:120] if summary else ''}"))
+
+        # 4. Search Decisions
+        r = conn.execute("MATCH (d:Decision) RETURN d.title, d.choice, d.reason, d.embedding")
+        while r.has_next():
+            row = r.get_next()
+            title, choice, reason, emb = row[0], row[1], row[2], row[3]
+            score = 0.0
+            if emb:
+                score = cosine_similarity(query_vec, emb)
+            else:
+                score = 0.5 if any(k in (title + choice + reason).lower() for k in keywords) else 0.0
+            
+            if score > 0.3:
+                results.append((score, f"[Decision] {title} → chose: {choice} — {reason[:100] if reason else ''}"))
+
+        # 5. Search Files
+        r = conn.execute("MATCH (f:File) RETURN f.path, f.purpose, f.language, f.embedding")
+        while r.has_next():
+            row = r.get_next()
+            path, purpose, lang, emb = row[0], row[1], row[2], row[3]
+            score = 0.0
+            if emb:
+                score = cosine_similarity(query_vec, emb)
+            else:
+                score = 0.5 if any(k in (path + purpose).lower() for k in keywords) else 0.0
+            
+            if score > 0.3:
+                results.append((score, f"[File/{lang}] {path} — {purpose[:80] if purpose else ''}"))
+
+
+        # Sort by score
+        results.sort(key=lambda x: x[0], reverse=True)
+        final_results = [r[1] for r in results]
 
         conn.close()
 
-        if not results:
+        if not final_results:
             return f"No memory found for: '{question}'\nThis may be new territory — proceed and consider logging what you learn."
 
         out = [f"## Memory results for: '{question}'", ""]
-        for r in results[:10]:   # cap at 10 results
+        for r in final_results[:10]:   # cap at 10 results
             out.append(f"• {r}")
         return "\n".join(out)
 
@@ -321,19 +433,16 @@ def add_decision(
         conn = get_conn(db)
         init_schema(conn)
 
+        from dimagx.embeddings import generate_embedding
+        from dimagx.db import upsert_decision
+
         decision_id = f"adr_{hashlib.md5(title.encode()).hexdigest()[:10]}"
         project_id  = get_project_id(config)
         now = datetime.now().isoformat()
-
-        conn.execute(f"""
-            MERGE (d:Decision {{id: '{esc(decision_id)}'}})
-            ON CREATE SET
-                d.title   = '{esc(title)}',
-                d.context = '{esc(context[:400])}',
-                d.choice  = '{esc(choice[:400])}',
-                d.reason  = '{esc(reason[:400])}',
-                d.created = '{esc(now)}'
-        """)
+        
+        # Generate embedding
+        emb = generate_embedding(f"{title} {context} {choice} {reason}")
+        upsert_decision(conn, decision_id, title, context, choice, reason, now, embedding=emb)
 
         try:
             conn.execute(f"""
