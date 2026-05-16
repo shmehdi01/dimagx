@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DimagX | Project Brain for Coding Agents</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">Dimag<span>X</span> 🧠</div>
+            <nav>
+                <a href="#features">Features</a>
+                <a href="../docs/architecture.md">Docs</a>
+                <a href="https://github.com/shmehdi01/dimagx">GitHub</a>
+            </nav>
+        </header>
+
+        <section class="hero">
+            <h1>The brain your coding agent never had.</h1>
+            <p>Persistent memory for your project. One command to build a graph of your code, PRDs, decisions, and context.</p>
+            <div class="cta-group">
+                <a href="#install" class="btn btn-primary">Get Started</a>
+                <a href="https://github.com/shmehdi01/dimagx" class="btn btn-secondary">Star on GitHub</a>
+            </div>
+        </section>
+
+        <div class="code-window" id="install">
+            <span style="color: #6ee7b7;">$</span> pip install dimagx<br>
+            <span style="color: #6ee7b7;">$</span> dimagx init<br>
+            <span style="color: #94a3b8;">Scanning project... </span><br>
+            <span style="color: #94a3b8;">Building Memory Graph... </span><br>
+            <span style="color: #8b5cf6;">✅ Brain Initialized. 142 files indexed, 8 PRDs synced.</span>
+        </div>
+
+        <section class="features" id="features">
+            <div class="card">
+                <h3>Persistent Context</h3>
+                <p>Never re-explain your project to an agent. DimagX maintains state across sessions and models.</p>
+            </div>
+            <div class="card">
+                <h3>Semantic Memory</h3>
+                <p>Vector embeddings allow agents to search your memory by meaning, not just keywords.</p>
+            </div>
+            <div class="card">
+                <h3>Graph-Backed</h3>
+                <p>Links source code to PRDs, git commits, and architectural decisions automatically.</p>
+            </div>
+            <div class="card">
+                <h3>MCP Ready</h3>
+                <p>Connects to Claude Code, Cursor, and Windsurf via the Model Context Protocol.</p>
+            </div>
+            <div class="card">
+                <h3>AI PRD Ingestion</h3>
+                <p>Drop your PRDs in PDF or MD. DimagX summarizes them and extracts implementation features.</p>
+            </div>
+            <div class="card">
+                <h3>Background Watcher</h3>
+                <p>Real-time indexing as you code. Every change is instantly available to your agent.</p>
+            </div>
+        </section>
+
+        <footer>
+            Built by @syedhussainmehdi • DimagX is Licensed under MIT
+        </footer>
+    </div>
+</body>
+</html>
