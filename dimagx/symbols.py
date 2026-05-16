@@ -39,6 +39,9 @@ ENTITY_REGEX = {
         (r"(?:const|let|var)\s+([A-Z]\w+)\s*=\s*(?:\([^)]*\)|[a-zA-Z_]\w*)\s*=>", "component", "React"),
         (r"function\s+([A-Z]\w+)\s*\(", "component", "React"),
         (r"(?:const|let|var)\s+(use[A-Z]\w+)\s*=", "hook", "React"),
+    ],
+    ".py": [
+        (r"@(?:app|router)\.(?:get|post|put|delete|patch|route)\s*\(\s*['\"]([^'\"]+)['\"]", "route", "FastAPI"),
     ]
 }
 
