@@ -2,6 +2,8 @@
 
 > **Project brain for coding agents.**  
 > One command. Persistent memory. Switch models freely — your agent always knows where you left off.
+>
+> [View Changelog](./CHANGELOG.md)
 
 ---
 
@@ -336,6 +338,9 @@ dimagx/
 
 - [x] Semantic search (embeddings) in `query_memory`
 - [x] Tree-sitter code parsing — function/class level indexing
+- [x] Framework-specific entity extraction (Flutter, React, FastAPI)
+- [x] Bug tracking commands & auto-detection
+- [x] Hierarchical Graph View (`dimagx graph`)
 - [x] `dimagx feature update` — add description post-creation
 - [x] Web UI — browser-based memory explorer
 - [ ] PyPI publish — `pip install dimagx`

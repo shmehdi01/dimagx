@@ -49,7 +49,7 @@ def main_callback(
 ):
     """DimagX — Project brain for coding agents."""
     if version:
-        console.print("DimagX [bold cyan]v0.1.0[/bold cyan]")
+        console.print("DimagX [bold cyan]v0.2.0[/bold cyan]")
         raise typer.Exit()
     
     if ctx.invoked_subcommand is None:

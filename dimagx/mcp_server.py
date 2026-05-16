@@ -65,7 +65,7 @@ mcp = FastMCP(
         "DimagX is the memory brain for this project. "
         "Always call get_context() at the start of a session to orient yourself. "
         "Do NOT analyze files from scratch. Always use get_files() or query_memory() to look up files by feature or purpose. "
-        "Call log_prompt() after completing any significant task. DimagX will automatically detect if your prompt is a Bug Fix or a Feature implementation based on your description.",
+        "Call log_prompt() after completing any significant task. DimagX will automatically detect if your prompt is a Bug Fix or a Feature implementation based on your description. "
         "Use query_memory() before asking the user to explain something — it may already be known."
     ),
 )
