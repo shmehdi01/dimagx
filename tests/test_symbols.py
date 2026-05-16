@@ -34,11 +34,13 @@ def test_extraction():
         
         print("Testing React extraction...")
         react = extract_entities(Path("test_react.jsx"))
-        assert any(e['name'] == 'MyComponent' for e in react)
+        print(f"React entities found: {react}")
+        assert any(e['name'] == 'MyComponent' for e in react), f"Failed to find 'MyComponent' in {react}"
         
         print("Testing FastAPI extraction...")
         python = extract_entities(Path("test_fastapi.py"))
-        assert any(e['kind'] == 'route' for e in python)
+        print(f"FastAPI entities found: {python}")
+        assert any(e['kind'] == 'route' for e in python), f"Failed to find route in {python}"
         
         print("✅ All entity extraction tests passed!")
     finally:

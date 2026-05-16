@@ -17,5 +17,5 @@ def get_users():
 
 print_ast(python_code, "python")
 
-flutter_code = "class CounterCubit extends Cubit<int> {}"
-print_ast(flutter_code, "dart")
+react_code = "const MyComponent = () => { return <div>Hello</div>; };"
+print_ast(react_code, "javascript")

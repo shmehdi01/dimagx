@@ -30,6 +30,16 @@ ENTITY_REGEX = {
         (r"class\s+(\w+Provider)\s+extends\s+", "provider", "Flutter"),
         (r"class\s+(\w+Page)\s+extends\s+", "page", "Flutter"),
     ],
+    ".jsx": [
+        (r"(?:const|let|var)\s+([A-Z]\w+)\s*=\s*(?:\([^)]*\)|[a-zA-Z_]\w*)\s*=>", "component", "React"),
+        (r"function\s+([A-Z]\w+)\s*\(", "component", "React"),
+        (r"(?:const|let|var)\s+(use[A-Z]\w+)\s*=", "hook", "React"),
+    ],
+    ".js": [
+        (r"(?:const|let|var)\s+([A-Z]\w+)\s*=\s*(?:\([^)]*\)|[a-zA-Z_]\w*)\s*=>", "component", "React"),
+        (r"function\s+([A-Z]\w+)\s*\(", "component", "React"),
+        (r"(?:const|let|var)\s+(use[A-Z]\w+)\s*=", "hook", "React"),
+    ]
 }
 
 ENTITY_QUERIES = {
