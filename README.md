@@ -3,7 +3,7 @@
 > **Project brain for coding agents.**  
 > One command. Persistent memory. Switch models freely — your agent always knows where you left off.
 >
-> [View Changelog](./CHANGELOG.md)
+> [View Changelog](./CHANGELOG.md) | [Documentation](./docs/architecture.md)
 
 ---
 
