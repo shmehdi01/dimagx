@@ -1,1 +1,19 @@
 dimagx.egg-info/
+__pycache__/
+*.pyc
+.DS_Store
+dist/
+build/
+.dimagx/
+! .dimagx/config.yaml
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/

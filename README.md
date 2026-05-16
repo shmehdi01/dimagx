@@ -2,6 +2,8 @@
 
 > **Project brain for coding agents.**  
 > One command. Persistent memory. Switch models freely — your agent always knows where you left off.
+>
+> [View Changelog](./CHANGELOG.md) | [Documentation](./docs/architecture.md)
 
 ---
 
@@ -33,13 +35,31 @@ your-project/
     └── prd/              ← drop PRDs here
 ```
 
-DimagX indexes your codebase into a graph with 7 node types:
+DimagX indexes your codebase into a graph with 8 node types:
 
 ```
-Project → File → Feature → Prompt → PRD → Decision → Commit
+Project → File → Symbol → Feature → Prompt → PRD → Decision → Commit
 ```
 
 Your coding agent queries this graph via MCP instead of re-reading everything.
+
+---
+
+## v0.2.0: Semantic Memory & Code Symbols 🚀
+
+DimagX now goes deeper than just file names. It understands **what's inside** your code and can search your memory **semantically**.
+
+### 1. Symbol-Level Indexing
+Using **Tree-sitter**, DimagX extracts classes and functions from your code.
+- Filter by `Symbol` nodes in your memory.
+- Instant access to function definitions and class structures.
+- Supported languages: Python, JavaScript, TypeScript, Go, Rust, Java, and more.
+
+### 2. Semantic Search (Embeddings)
+The `query_memory(question)` tool now uses **Vector Embeddings** (`sentence-transformers`).
+- Doesn't rely on keyword matching.
+- Asks "How do I handle auth?" and finds the relevant PRD, File, and Feature even if they don't contain the word "auth".
+- Local execution — no tokens sent to external embedding providers.
 
 ---
 
@@ -260,9 +280,9 @@ dimagx status
 │                                         │
 │  Project ── File ── Feature             │
 │     │          │       │                │
-│  Commit     Prompt    PRD               │
+│  Commit     Symbol    PRD               │
 │                │       │                │
-│            Decision ───┘                │
+│            Prompt ── Decision           │
 └──────────────┬──────────────────────────┘
                │ MCP (stdio)
                ▼
@@ -283,7 +303,8 @@ dimagx status
 | Agent protocol | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) |
 | File watcher | [Watchdog](https://python-watchdog.readthedocs.io/) |
 | PRD summarization | [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-python) |
-| Code parsing | Tree-sitter (coming in v0.2) |
+| Code parsing | [Tree-sitter](https://tree-sitter.github.io/tree-sitter/) |
+| Embeddings | [Sentence-Transformers](https://sbert.net/) |
 
 ---
 
@@ -303,7 +324,9 @@ dimagx/
 │   ├── watcher.py         # File system watcher
 │   ├── watcher_daemon.py  # Background daemon entry point
 │   ├── githook.py         # Git hook installer + commit logger
-│   └── commit_log.py      # Called by post-commit hook
+│   ├── commit_log.py      # Called by post-commit hook
+│   ├── symbols.py         # Tree-sitter symbol extraction
+│   └── embeddings.py      # Local vector embedding generation
 ├── pyproject.toml
 ├── setup.py
 └── README.md
@@ -313,10 +336,13 @@ dimagx/
 
 ## Roadmap
 
-- [ ] Semantic search (embeddings) in `query_memory`
-- [ ] Tree-sitter code parsing — function/class level indexing
-- [ ] `dimagx feature update` — add description post-creation
-- [ ] Web UI — browser-based memory explorer
+- [x] Semantic search (embeddings) in `query_memory`
+- [x] Tree-sitter code parsing — function/class level indexing
+- [x] Framework-specific entity extraction (Flutter, React, FastAPI)
+- [x] Bug tracking commands & auto-detection
+- [x] Hierarchical Graph View (`dimagx graph`)
+- [x] `dimagx feature update` — add description post-creation
+- [x] Web UI — browser-based memory explorer
 - [ ] PyPI publish — `pip install dimagx`
 - [ ] VS Code extension
 

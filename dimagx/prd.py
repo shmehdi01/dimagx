@@ -121,7 +121,8 @@ def summarize_prd(text: str, api_key: str) -> dict:
 # ── Graph storage ──────────────────────────────────────────────────────────────
 
 def store_prd(conn, project_id: str, prd_data: dict, source_file: str, version: str) -> str:
-    from dimagx.db import esc, upsert_feature, link_project_feature
+    from dimagx.db import esc, upsert_feature, link_project_feature, upsert_prd
+    from dimagx.embeddings import generate_embedding
 
     prd_id = f"prd_{hashlib.md5((prd_data['title'] + version).encode()).hexdigest()[:10]}"
     now = datetime.now().isoformat()
@@ -130,15 +131,9 @@ def store_prd(conn, project_id: str, prd_data: dict, source_file: str, version: 
     summary = prd_data.get("summary", "")
     ver     = prd_data.get("version", version)
 
-    conn.execute(f"""
-        MERGE (p:PRD {{id: '{esc(prd_id)}'}})
-        ON CREATE SET
-            p.title   = '{esc(title)}',
-            p.summary = '{esc(summary[:800])}',
-            p.source  = '{esc(source_file)}',
-            p.version = '{esc(ver)}',
-            p.created = '{esc(now)}'
-    """)
+    # Generate embedding for PRD
+    prd_emb = generate_embedding(f"{title} {summary}")
+    upsert_prd(conn, prd_id, title, summary, source_file, ver, now, embedding=prd_emb)
 
     # Link PRD to project
     try:
@@ -152,15 +147,12 @@ def store_prd(conn, project_id: str, prd_data: dict, source_file: str, version: 
     # Auto-create feature nodes from PRD and link
     for feat_title in prd_data.get("features", []):
         feat_id = f"feat_{hashlib.md5(feat_title.encode()).hexdigest()[:12]}"
-        conn.execute(f"""
-            MERGE (f:Feature {{id: '{esc(feat_id)}'}})
-            ON CREATE SET
-                f.title       = '{esc(feat_title)}',
-                f.description = 'Auto-created from PRD: {esc(title)}',
-                f.status      = 'planned',
-                f.created     = '{esc(now)}',
-                f.updated     = '{esc(now)}'
-        """)
+        feat_desc = f"Auto-created from PRD: {title}"
+        
+        # Generate embedding for feature
+        f_emb = generate_embedding(f"{feat_title} {feat_desc}")
+        upsert_feature(conn, feat_id, feat_title, feat_desc, "planned", now, now, embedding=f_emb)
+        
         try:
             conn.execute(f"""
                 MATCH (proj:Project {{id: '{esc(project_id)}'}}), (f:Feature {{id: '{esc(feat_id)}'}})
